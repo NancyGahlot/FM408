@@ -1,0 +1,265 @@
+# Variables given 
+nu_bar<-0.0354 
+nu_0 <- nu_bar 
+ita <- 0.3877 
+rho<- -0.7165  # corr
+lambda <- 1.3253 
+r <- 0 
+delta <- 0 
+S_0 <- 100
+k<-100
+
+T<-1
+day<-250
+hrs<-2500
+
+dt_d<-1/250  
+dt_h<-1/2500
+nsim<-100
+
+set.seed(100)
+
+
+###################################################################################
+##### Simulate Heston Variance & lognormal stock price ############################
+
+#N is the length of the time period
+sim<-function(S,N,r,dt)
+{
+  Log<-c()
+  Log[1]<-S_0
+  Heston<-c()
+  Heston[1]<-nu_0
+  
+  # Generate 2 independent Uniforms 
+  U1<-runif(N) 
+  U2<-runif(N) 
+  # Generate 2 independent Gaussians 
+  Z1<-sqrt(-2*log(U1))*cos(2*pi*U2) 
+  Z2<-sqrt(-2*log(U1))*sin(2*pi*U2) 
+  
+  W <- Z1 * sqrt(dt) # GBM 
+  W_V <-(rho * Z1 + sqrt(1-rho^2)*Z2)* sqrt(dt) # Heston model 
+  
+  for ( i in 2:N) 
+  { # Heston model to calculate sigma 
+    Heston[i]<-nu_bar+ ita * sqrt(Heston[i-1]) * W_V[i-1] 
+    
+    # Stock path from BS equation solution 
+    Log[i]<-Log[i-1]*exp((r-0.5*Heston[i])*dt+sqrt(Heston[i])*W[i-1]) 
+  } 
+  
+  return(list(Log ,Heston))
+}
+
+Daily<-sim(S_0,day+1,r,dt_d)
+Daily[1]
+Hourly<-sim(s_0,hrs+1,r,dt_h)
+Hourly[1]
+
+sim_paths<-function(S,N,r,dt,nsim)
+{
+  StockPaths<-data.frame(matrix(ncol = N, nrow = nsim))
+  VolPaths<-data.frame(matrix(ncol = N, nrow = nsim))
+  ## Simulate nsim times
+  for ( i in 1:nsim){
+    StockPaths[i,]<-unlist(sim(S,N,r,dt)[1])
+    VolPaths[i,]<-unlist(sim(S,N,r,dt)[2])
+  }
+  return(list(StockPaths,VolPaths))
+}
+
+Paths_daily<-sim_paths(s_0,day+1,r,dt_d,nsim) 
+#View(Paths_daily[[1]]) #see stock price
+#View(Paths_daily[[2]])#see heston vol
+StockPath_Daily <- as.matrix(Paths_daily[[1]])
+VolPath_Daily <- as.matrix(Paths_daily[[2]])
+
+Paths_hrly<-sim_paths(s_0,hrs+1,r,dt_h,nsim) 
+#View(Paths_hrly[[1]])
+#View(Paths_hrly[[2]])
+StockPath_hrly <- as.matrix(Paths_hrly[[1]])
+VolPath_hrly <- as.matrix(Paths_hrly[[2]])
+
+###Rename columns (Later)
+
+### X the path to be ploted (Plot first 10 paths)
+plot_Path <-function (StockPath,VolPath){
+  par(mfrow=c(1,2))
+  
+  ##Plot simulated stock Paths
+  plot(StockPath[1,],type="l",col="blue",
+       main="Stock price paths",ylim=c(0,S_0*2),
+       ylab="Value",xlab="N")
+  
+  for (i in 1:10){
+    lines(StockPath[i,],
+          col=colors(1)[400*round(runif(1),2)])
+  }
+  ##Plot simulated vol Paths  
+  plot(VolPath[1,],type="l",col="blue",
+       main="Heston Vol paths",ylim=c(0,nu_0*2),
+       ylab="Value",xlab="N")
+
+  for (i in 1:10){
+    lines(VolPath[i,],
+          col=colors(1)[400*round(runif(1),2)])
+  }
+}
+
+
+plot_Path(StockPath_Daily,VolPath_Daily)
+plot_Path(StockPath_hrly,VolPath_hrly)
+
+
+###################################################################################
+##### Strategy A - Rebalance accord. to BS delta  ############################
+## Assume buy call with K=100 at t=0
+## Call Price from Heston
+## PNL = Call Price - Delta*Stock Price
+
+
+BSprice<-function(pc, S, k, vol, d, r, t)
+{
+  # pc  put/call indicator call=1, put=-1
+  # S   Stock price at 0
+  # k   strike
+  # vol volatility (time avg)
+  # d   dividend yield
+  # r   riskless rate
+  # t   time to maturity
+  # dt  rebalancing period
+  
+  d1 = (log(S/k) + t*(r - d + (vol^2)/2)) / (vol * sqrt(t));
+  d2 = d1 - vol * sqrt(t);
+  y = pc * exp(-d * t) * S * pnorm(pc * d1) - pc * k * exp(-r * t) * pnorm(pc * d2)
+  return(y)
+}
+
+##Call Price under BS model
+BSCallPrice_d<-BSprice(1,StockPath_Daily,k,nu_bar,0,r,1)
+BSCallPrice_h<-BSprice(1,StockPath_hrly,k,nu_bar,0,r,1)
+
+
+
+###Calculate Heston price using for loop (calcualte & plug in time varying vol one at a time)
+## Run PS7 Module 1-5
+library(geoR)
+
+# kappa: lambda in our notes and in Gatheral
+# theta: \bar{\nu} in our notes
+# sigma: eta in our notes
+# v: initial variance 
+# im_k = .5; # technical
+# gamma = 1; 
+
+Call_Prices_daily <-data.frame(matrix(ncol = day, nrow = nsim))
+Call_Prices_hrly <-data.frame(matrix(ncol = hrs, nrow = nsim))
+
+for (i in 1:nsim){
+  for (j in 1:day){
+  Call_Prices_daily[i,j] = HCTrans(StockPath_Daily,100,r,0,nu_bar,1,0.5,nu_bar,lambda,ita,rho,gamma,'Call');
+  }
+}
+Call_Prices_daily
+
+Call_Prices_hrly <-data.frame(matrix(ncol = hrs, nrow = nsim))
+for (i in 1:nsim){
+  for (j in 1:hrs){
+    Call_Prices_hrly[i,j] = HCTrans(StockPath_hrly,100,r,0,nu_bar,1,0.5,nu_bar,lambda,ita,rho,gamma,'Call');
+  }
+}
+Call_Prices_hrly
+
+####### Rebalancing Accord to BSDelta #################
+## Implied vol from Heston call price
+BSvega<-function(pc, S, k, vol, d, r, t)
+{
+  #pc  put/call indicator call=1, put=-1
+  #S   Stock price at 0
+  #K   strike
+  #vol volatility
+  #d   dividend yield
+  #r   riskless rate
+  #t   time to maturity
+  
+  d1 = (log(S / k) + t * (r - d + (vol ^ 2) / 2)) / (vol * sqrt(t))
+  
+  BSvega = exp(-d * t) * S * sqrt(t) * exp((-d1 ^ 2) / 2) / (sqrt(2 * pi))
+  return(BSvega)
+}
+
+BSvol<-function(pc, S, k, price, d, r, t, start = nu_bar)
+{
+  #pc    put/call indicator call=1, put=-1
+  #S     Stock price at 0
+  #K     strike
+  #price option premium
+  #d     dividend yield
+  #r     riskless rate
+  #t     time to maturity
+  #start starting value for vol, optional is nu_bar
+  
+  
+  voli = start
+  pricei = BSprice(pc, S, k, voli, d, r, t)
+  vegai = BSvega(pc, S, k, voli, d, r, t)
+  while(abs(price - pricei) > 0.000001) 
+  {
+    voli<-voli + (price - pricei) / vegai
+    pricei<-BSprice(pc, S, k, voli, d, r, t)
+    vegai<-BSvega(pc, S, k, voli, d, r, t)
+  }
+  
+  BSvol = voli
+  return(BSvol)
+}
+
+IV_daily <-data.frame(matrix(ncol = day, nrow = nsim))
+IV_hrly <-data.frame(matrix(ncol = hrs, nrow = nsim))
+
+for (i in 1:nsim){
+  for (j in 1:day){
+    IV_daily[i,j] = BSvol(1,StockPath_Daily,100,Call_Prices_daily,0,r,1,nu_0)
+    }
+}
+
+for (i in 1:nsim){
+  for (j in 1:hrs){
+    IV_daily[i,j] = BSvol(1,StockPath_hrly,100,Call_Prices_hrly,0,r,1,nu_0)
+  }
+}
+
+
+BSdelta<-function(pc, S, k, vol, d, r, t)
+{
+  #pc  put/call indicator call=1, put=-1
+  #S   Stock price at 0
+  #K   strike
+  #vol volatility
+  #d   dividend yield
+  #r   riskless rate
+  #t   time to maturity
+  
+  d1 = (log(S / k) + t * (r - d + (vol ^ 2) / 2)) / (vol * sqrt(t))
+  
+  if (pc == 1) {BSdelta = exp(-d * t) * pnorm(d1)} else 
+  {BSdelta = exp(-d * t) * (pnorm(d1) - 1)}
+  return(BSdelta)
+}
+
+Delta_StrgyA_daily<-BSdelta(1,StockPath_Daily,k,IV_daily,0,r,1)
+Delta_StrgyA_hrly<-BSdelta(1,StockPath_hrly,k,IV_hrly,0,r,1)
+
+###PNL
+
+PNL_StrgyA_daily<- HPrice_daily - (Delta_StrgyA_daily*StockPath_Daily)[,2:(day+1)]
+PNL_d<-apply(PNL_StrgyA_daily,1,sum)
+plot (PNL_d)
+
+PNL_StrgyA_hrly<- HPrice_daily - (Delta_StrgyA_hrly*StockPath_hrly)[,2:(hrs+1)]
+PNL_h<-apply(PNL_StrgyA_hrly,1,sum)
+
+plot (PNL_d,type="l",col="blue",main="StrgyA Daily PNL",ylab="P&L",xlab="N")
+plot (PNL_h,type="l",col="blue",main="StrgyA Hourly PNL",ylab="P&L",xlab="N")
+
