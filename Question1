@@ -1,0 +1,167 @@
+
+lagpad <- function(x, k) {
+  if (k>0) {
+    return (c(rep(NA, k), x)[1 : length(x)] );
+  }
+  else {
+    return (c(x[(-k+1) : length(x)], rep(NA, -k)));
+  }
+}
+
+##Calculates annualized Realized Volatility
+BSRVOL<-function(price)
+{
+
+ret <- lagpad(price,1) - price
+ret[is.na(ret)]<-0
+vol <- sd(ret) * sqrt(250) * 100
+return(vol)
+}
+
+BSvega<-function(pc, S, k, vol, d, r, t)
+{
+  #pc  put/call indicator call=1, put=-1
+  #S   Stock price at 0
+  #K   strike
+  #vol volatility
+  #d   dividend yield
+  #r   riskless rate
+  #t   time to maturity
+  
+  d1 = (log(S / k) + t * (r - d + (vol ^ 2) / 2)) / (vol * sqrt(t))
+  
+  BSvega = exp(-d * t) * S * sqrt(t) * exp((-d1 ^ 2) / 2) / (sqrt(2 * pi))
+  return(BSvega)
+}
+
+## This function returns Implied Vol using BSM
+BSvol<-function(pc, S, k, price, d, r, t, start = 0.2)
+{
+  #pc    put/call indicator call=1, put=-1
+  #S     Stock price at 0
+  #K     strike
+  #price option premium
+  #d     dividend yield
+  #r     riskless rate
+  #t     time to maturity
+  #start starting value for vol, optional, by default=0.2
+  
+  
+  voli = start
+  pricei = BSprice(pc, S, k, voli, d, r, t)
+  vegai = BSvega(pc, S, k, voli, d, r, t)
+  while(abs(price - pricei) > 0.000001) 
+  {
+    voli<-voli + (price - pricei) / vegai
+    pricei<-BSprice(pc, S, k, voli, d, r, t)
+    vegai<-BSvega(pc, S, k, voli, d, r, t)
+  }
+  
+  BSvol = voli
+  return(BSvol)
+}
+
+#tHIS FUNCTION SIMULATES AND RETURNS STOCK PRICES
+#Simulate two correlated brownian motion
+#Simulate stock price and volatility
+SimStockAndVol <- function(deltaT, seed1, seed2, rho, sigma)
+{
+  set.seed(seed1)
+  #standard normal var as time horizon is 1 hence variance of brownian motion = 1
+  z1 <- rnorm(deltaT)
+  set.seed(seed2)
+  z2 <- rnorm(deltaT)
+  w2 <- rho* z1 + sqrt(1- rho*rho) * z2
+  #w2 and z1 are vectors of correlated normal variables
+  # Using z1 to simulate stock prices 
+  #and z2 to simulate volatility
+  Log<-c()
+  Log[1]<- 100
+  mu = 0
+  for( i in 2:length(z1))
+  {
+   
+    Log[i]<-Log[i-1]*exp((mu-0.5*sigma^2)/deltaT+sigma*z1[i-1])
+    
+  }
+  return(Log)
+}
+
+#This function calculates option prices using black scholes method
+BSprice<-function(pc, S, k, vol, d, r, t)
+{
+  #pc  put/call indicator call=1, put=-1
+  #S   Stock price at 0
+  #K   strike
+  #vol volatility
+  #d   dividend yield
+  #r   riskless rate
+  #t   time to maturity
+  
+  
+  d1 = (log(S / k) + t * (r - d + (vol ^ 2) / 2)) / (vol * sqrt(t))
+  d2 = d1 - vol * sqrt(t)
+  
+  BSprice = pc * exp(-d * t) * S * 
+    pnorm(pc * d1) - pc * k * exp(-r * t) * pnorm(pc * d2)
+  return(BSprice)
+}
+
+#Caclulates BSM Delta
+
+BSDelta<-function(pc, S, k, vol, d, r, t)
+{
+  d1 = (log(S / k) + t * (r - d + (vol ^ 2) / 2)) / (vol * sqrt(t))
+  
+  if (pc == 1) {BSdelta = exp(-d * t) * pnorm(d1)} else 
+  {BSdelta = exp(-d * t) * (pnorm(d1) - 1)}
+  return(BSdelta)
+  
+}
+
+realizedVar <- list()
+
+#Sigma in this function is the IV that should be calculated using BSM from heston price
+#This is main driver function that uses simulated stock prices to cacl delta then pnl and RV
+driver <- function(deltaT, seed1, seed2,sigma)
+{
+BSPrice <- c()
+BSdelta <- c()
+PnL <- c()
+StockPrice <- SimStockAndVol(deltaT,seed1,seed2,0.50, sigma)
+realizedVar <- BSRVOL(StockPrice)
+#print(StockPrice)
+print("Realized Var")
+print( realizedVar)
+print("Implied Var")
+print( sigma)
+for(i in 1:length(StockPrice))
+{
+  BSPrice[i] <- BSprice(1,StockPrice[i],80, 0.75,0,0,1-(i/deltaT))
+  
+  BSdelta[i] <- BSDelta(1, StockPrice[i], 80, 0.75, 0,0, 1-(i/deltaT))
+  
+  if(i == 1)
+  {
+
+    PnL[i] <-  BSdelta[1]*StockPrice[1] -BSPrice[1] 
+  }
+  if(i > 1)
+  {
+
+    PnL[i] <- PnL[i-1] - BSdelta[i-1]*StockPrice[i] + BSdelta[i]*StockPrice[i]
+  }
+}
+return(PnL)
+}
+
+##---TODO----##
+#Add a function here which returns a vector of implied vols that we can pass on to driver function for each rep
+sigma <- c(7500,25000,1100,2000,5,55)
+plot(driver(250,1,2,sigma[1]),  col="blue", lty=1 )
+lines(driver(250,3,4,sigma[2]), col="red",lty=2)
+lines(driver(250,5,6,sigma[3]), col="green",lty=3)
+lines(driver(250,7,8,sigma[4]), col="black",lty=4)
+lines(driver(250,9,10,sigma[5]), col="yellow",lty=5)
+lines(driver(250,11,12,sigma[6]), col="orange",lty=6)
+#plot (PnL)
